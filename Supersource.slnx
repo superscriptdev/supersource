@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/Core/">
+    <Project Path="src/Supersource/Supersource.csproj" />
+    <Project Path="src/Supersource.Cli/Supersource.Cli.csproj" />
+    <Project Path="tests/Supersource.Tests/Supersource.Tests.csproj" />
+    <Project Path="tests/Supersource.Cli.Tests/Supersource.Cli.Tests.csproj" />
+    <Project Path="tests/Supersource.StrangerTests/Supersource.StrangerTests.csproj" />
+  </Folder>
+  <Folder Name="/Optional vocabularies/">
+    <Project Path="src/Supersource.Vocabularies/Supersource.Vocabularies.csproj" />
+    <Project Path="tests/Supersource.Vocabularies.Tests/Supersource.Vocabularies.Tests.csproj" />
+  </Folder>
+</Solution>
