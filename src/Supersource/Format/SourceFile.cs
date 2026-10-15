@@ -150,4 +150,44 @@ public struct SourceFile
         file.History = Timeline.Log.Create();
         return file;
     }
+
+    /// <summary>
+    /// An independent in-memory copy: graph, kind table, history and preserved unknown sections.
+    /// Node IDs, kind handles and relation handles keep their meaning, so a <see cref="NodeId"/> or
+    /// <see cref="Kinds.KindId"/> read from the original addresses the same thing in the copy.
+    ///
+    /// The copy owns its payload bytes and holds no mapping, so it stays usable after the original
+    /// is closed, and runs are sized to their used lengths as <see cref="SourceCompact"/> does.
+    /// Because that relocates the arenas, the copy carries no saved-digest or incremental-append
+    /// state: saving it writes a complete file. It is a copy of this source, not a new one —
+    /// <see cref="Source.Identity"/> is retained, and giving the copy a separate identity is the
+    /// caller's explicit act.
+    /// </summary>
+    public static SourceFile Clone(in SourceFile file)
+    {
+        SourceFile into = default;
+        into.Src = SourceCompact.Compact(in file.Src);
+        into.Table = KindTable.Clone(in file.Table);
+        into.Boot = file.Boot;
+        into.History = Timeline.Log.Clone(in file.History);
+
+        into.UnknownCount = file.UnknownCount;
+        into.UnknownSections = new UnknownSection[file.UnknownCount < 1 ? 0 : file.UnknownCount];
+        for (int i = 0; i < file.UnknownCount; i++)
+        {
+            into.UnknownSections[i].Id = file.UnknownSections[i].Id;
+            into.UnknownSections[i].Bytes = file.UnknownSections[i].Bytes == null
+                ? null
+                : (byte[])file.UnknownSections[i].Bytes.Clone();
+        }
+
+        into.SectionOrderCount = file.SectionOrderCount;
+        into.SectionOrder = new uint[file.SectionOrderCount < 1 ? 0 : file.SectionOrderCount];
+        for (int i = 0; i < file.SectionOrderCount; i++)
+        {
+            into.SectionOrder[i] = file.SectionOrder[i];
+        }
+
+        return into;
+    }
 }

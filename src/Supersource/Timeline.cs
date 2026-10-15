@@ -449,6 +449,42 @@ public struct Log
         return log;
     }
 
+    /// <summary>
+    /// An independent copy, including the undone suffix past <see cref="At"/> and the next order
+    /// number, so the copy can be undone and redone exactly as far as the original. Each entry's
+    /// captured payload bytes are copied rather than shared, so editing one log never reaches the
+    /// other's inverse data.
+    /// </summary>
+    public static Log Clone(in Log log)
+    {
+        Log into = default;
+        into.Count = log.Count;
+        into.At = log.At;
+        into.nextOrder = log.nextOrder;
+
+        if (log.Entries == null)
+        {
+            return into;
+        }
+
+        into.Entries = new Entry[log.Entries.Length];
+        for (int i = 0; i < log.Count; i++)
+        {
+            Entry entry = log.Entries[i];
+            if (entry.Op.Value != null)
+            {
+                entry.Op.Value = (byte[])entry.Op.Value.Clone();
+            }
+            if (entry.Op.OldValue != null)
+            {
+                entry.Op.OldValue = (byte[])entry.Op.OldValue.Clone();
+            }
+            into.Entries[i] = entry;
+        }
+
+        return into;
+    }
+
     /// <summary>Applies an operation before recording it, so the entry includes captured inverse data.</summary>
     public static void Do(ref Log log, ref Source src, Operation op, int actor = 0)
     {

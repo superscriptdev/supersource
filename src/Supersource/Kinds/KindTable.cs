@@ -50,6 +50,30 @@ public struct KindTable
         return t;
     }
 
+    /// <summary>
+    /// An independent copy that interns the same names in the same slots, so a KindId or
+    /// RelationId taken from the original addresses the same kind in the copy. Interning a new
+    /// name into either table afterwards does not affect the other. Qualified names are immutable
+    /// and are shared rather than duplicated.
+    /// </summary>
+    public static KindTable Clone(in KindTable t)
+    {
+        KindTable into = default;
+        into.Schemas = t.Schemas == null ? null : (KindSchema[])t.Schemas.Clone();
+        into.KindNames = t.KindNames == null ? null : (QualifiedName[])t.KindNames.Clone();
+        into.SchemaDefined = t.SchemaDefined == null ? null : (bool[])t.SchemaDefined.Clone();
+        into.KindCount = t.KindCount;
+        into.RelationNames = t.RelationNames == null ? null : (QualifiedName[])t.RelationNames.Clone();
+        into.RelationSchemas =
+            t.RelationSchemas == null ? null : (RelationSchema[])t.RelationSchemas.Clone();
+        into.RelationCount = t.RelationCount;
+        into.RelationArena = t.RelationArena == null ? null : (RelationId[])t.RelationArena.Clone();
+        into.RelationArenaUsed = t.RelationArenaUsed;
+        into.kindBuckets = t.kindBuckets == null ? null : (int[])t.kindBuckets.Clone();
+        into.relationBuckets = t.relationBuckets == null ? null : (int[])t.relationBuckets.Clone();
+        return into;
+    }
+
     /// <summary>Interns a name, allocating a handle if needed. Does not define a schema.</summary>
     public static KindId Intern(ref KindTable t, QualifiedName name)
     {

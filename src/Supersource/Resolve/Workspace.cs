@@ -186,6 +186,51 @@ public static class Workspace
     }
 
     /// <summary>
+    /// Replaces a registration's graph with the source's current state, keeping the identity and
+    /// hash the loader supplied. A registration holds a copy of the <see cref="Source"/> struct,
+    /// and editing a source replaces the arrays that struct points at, so a registration made
+    /// before an edit keeps answering from the graph as it stood. Call this after editing a
+    /// registered source, or <see cref="IsStale"/> to find out whether it is needed.
+    ///
+    /// Refuses a source with a different identity: that is a new registration, not a newer view
+    /// of this one.
+    /// </summary>
+    public static void Update(ref Set set, int index, in Source src)
+    {
+        if (index < 0 || index >= set.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
+        if (!set.Sources[index].Identity.Equals(src.Identity))
+        {
+            throw new ArgumentException(
+                "A registration can only be refreshed from the source it was registered for.",
+                nameof(src));
+        }
+
+        set.Sources[index].Src = src;
+    }
+
+    /// <summary>
+    /// Whether this registration still describes the given source. True when the source has been
+    /// edited since it was registered, and also when it is a different source entirely. Comparing
+    /// revision and mutation stamp detects an edit; it is not a content comparison, so two sources
+    /// with equal content built by different sequences are not reported as equal.
+    /// </summary>
+    public static bool IsStale(in Set set, int index, in Source src)
+    {
+        if (index < 0 || index >= set.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
+        return !set.Sources[index].Identity.Equals(src.Identity)
+            || set.Sources[index].Src.Revision != src.Revision
+            || set.Sources[index].Src.Stamp != src.Stamp;
+    }
+
+    /// <summary>
     /// Follows a local edge, resolving through the workspace if its target is an external-reference
     /// node. Local targets return Bound with Pinned set; absent targets return DocumentMissing.
     /// </summary>

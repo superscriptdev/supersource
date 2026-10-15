@@ -211,6 +211,14 @@ are explicit outcomes. Fetching another source is an application responsibility.
 Workspace registration accepts the caller's snapshot identity and hash without verifying
 them against the loaded bytes. The loader is responsible for verifying that association.
 
+A registration holds a copy of the `Source` struct, which carries array references and counts.
+Editing a source replaces those arrays, so a registration made before an edit keeps answering
+from the graph as it stood: a node added afterwards resolves as `NodeMissing`. `Reach` already
+routes the home source around this, taking the live source from its caller. For every other
+registered source, `Workspace.IsStale` reports whether a registration has fallen behind and
+`Workspace.Update` refreshes it in place, keeping the identity and hash the loader supplied.
+`Update` refuses a source with a different identity; that is a new registration.
+
 ## Rules
 
 `SourceValidate` checks structural integrity, including node indices and containment. Source
@@ -247,6 +255,25 @@ and preserve generated content without running a generator.
 
 `SourceBuild` also permits direct construction and mutation without history. `Log.Do` records
 an operation after applying it; it does not provide batch rollback or transaction isolation.
+
+### Redo is session state, not document state
+
+The undone suffix stays out of the file, and this is a decision rather than an omission. A
+file's graph and its stored history have to agree: the history is what was applied to produce
+these bytes. A suffix describes operations the graph does not reflect, and it is valid only
+against one exact graph state. Any other writer that opens the file, edits it and saves would
+leave that suffix attached to a graph it no longer fits, and a reader replaying it would
+corrupt the document rather than restore a redo stack.
+
+`Log.Clone` carries the suffix and the cursor between in-memory copies, which is what forking
+a document for draft editing needs. An application that wants a redo stack to survive closing
+the file owns that state and stores it where its own validity rules apply.
+
+If a second consumer ever needs it in the file, the safe shape is a separate section holding
+the suffix together with the `Stamp` it attaches to, accepted on load only when the graph's
+stamp matches and silently dropped otherwise. `Entry.StampBefore`/`StampAfter` already record
+those stamps in memory; they are deliberately not serialized today. Nothing in the current
+tree needs this, so it is not built.
 
 ### Diff
 
@@ -446,6 +473,31 @@ This repository does not provide:
 
 These are consumers of Supersource. The format library remains independent of them.
 
+### APIs with no consumer in this tree
+
+Most of what looks unused from an application's side is reached through the CLI or from inside
+the library: `StructuralDiff`, `Merge`, `MergeRecord`, `RuleSet`, `StockRules`, `RelationCheck`
+and `KindRemap` are CLI verbs; `PayloadDiff` and `SourceCompact` serve diff, merge and
+`SourceFile.Clone`; `HistoryCodec` serves reading and writing; `Backrefs` serves the
+derivation vocabulary; `Linker` serves `RelationCheck`. Those are tool-level and library-level
+features, not speculative code.
+
+Three pieces have no consumer at all, and that is recorded here rather than left to be
+rediscovered:
+
+* **`Binder`** — candidates for a name, and binding a hole to one of them. Nothing in this tree
+  calls it. It is for an application whose references are authored by name; a consumer that
+  stores reference targets by ID resolves nothing and needs none of it. It is also what a
+  `bind` verb beside `holes` would be built on.
+* **`KindRename`** — renaming a kind or relation across a file. The counterpart `KindRemap` is
+  used by consumers; this one has no verb and no caller.
+* **`DerivationRules`** — opt-in checks in the companion library, deliberately outside the stock
+  rule set and the CLI's default `rules` command.
+
+They are kept and supported. Being unused is not evidence that an API is wrong, but it is
+evidence that its shape has never been tested against a second caller, so treat their contracts
+as provisional until one arrives.
+
 ## In-memory storage
 
 ```csharp
@@ -481,6 +533,31 @@ gets its own segment; individual payload lengths still use 32-bit integers.
 
 A `Source` is a struct containing references to backing arrays. Assigning it to another
 variable shares those arrays; it does not create an independent editable snapshot.
+
+### Copying a loaded source
+
+`SourceFile.Clone` makes an independent in-memory copy: graph, kind table, history and
+preserved unknown sections. It is what forking a document for draft editing needs, in place of
+writing bytes and reading them back.
+
+Node IDs, kind handles and relation handles keep their meaning, so a `NodeId` or `KindId` taken
+from the original addresses the same thing in the copy. That is the part a serialize-and-reload
+round trip does not give: a reloaded file interns its names in first-use order, so a consumer
+has to re-resolve every handle by qualified name.
+
+The copy owns its payload bytes and holds no mapping, so it stays usable after the original is
+closed. It is `SourceCompact` underneath, so runs are sized to their used lengths and the
+arenas are relocated. Because of that relocation the copy carries no saved-digest or
+incremental-append state: saving it writes a complete file. Interning a name into either kind
+table afterwards does not affect the other.
+
+`Log.Clone` copies the operation log including the undone suffix and the cursor, and copies
+each entry's captured payload bytes rather than sharing them. `KindTable.Clone` copies a table
+with its slots intact.
+
+A copy keeps the identity it copied. Two files with one identity are two copies of one source,
+which is what `Workspace` reports as an `IdentityCollision` when both are registered. Giving a
+copy a separate identity is the caller's explicit act, through `SourceBuild.MintIdentity`.
 
 ## File format
 
