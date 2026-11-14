@@ -150,13 +150,13 @@ public static class Edit
         return 3;
     }
 
-    static void CheckStructure(in SourceFile file)
+    internal static void CheckStructure(in SourceFile file)
     {
         if (!SourceValidate.Check(in file, out Problem[] problems))
             throw new ArgumentException("structural validation failed: " + problems[0].Kind + " " + problems[0].Node);
     }
 
-    static void CheckPayloads(in SourceFile file, HashSet<NodeId> touched)
+    internal static void CheckPayloads(in SourceFile file, HashSet<NodeId> touched)
     {
         RuleViolation[] found = new RuleViolation[8];
         int count = StockRules.PayloadMatchesTheSchema(in file.Src, in file.Table, ref found, 0);
@@ -427,7 +427,11 @@ public static class Edit
             throw new ArgumentException("text requires a kind with a UTF-8 payload; use base64 for other formats");
     }
 
-    static KindId FindKind(in SourceFile file, string name)
+    /// <summary>
+    /// A kind by local or qualified name. `put` restating a node whose kind the file carries no
+    /// schema for may name it; making a node of one still needs the schema.
+    /// </summary>
+    internal static KindId FindKind(in SourceFile file, string name, bool requireSchema = true)
     {
         int found = -1;
         for (int i = 0; i < file.Table.KindCount; i++)
@@ -437,12 +441,14 @@ public static class Edit
             if (found >= 0) throw new ArgumentException("ambiguous kind; use library-id/name: " + name);
             found = i;
         }
-        if (found < 0 || !KindTable.HasSchema(in file.Table, new KindId(found)))
+        if (found < 0 && !requireSchema)
+            throw new ArgumentException("unknown kind: " + name + "; --kinds names a source to take kinds from");
+        if (found < 0 || (requireSchema && !KindTable.HasSchema(in file.Table, new KindId(found))))
             throw new ArgumentException("kind needs an existing embedded schema: " + name);
         return new KindId(found);
     }
 
-    static RelationId FindRelation(in SourceFile file, string name)
+    internal static RelationId FindRelation(in SourceFile file, string name)
     {
         int found = -1;
         for (int i = 0; i < file.Table.RelationCount; i++)

@@ -345,8 +345,71 @@ that kind is a migration, not a declaration. A library needs no node for the kin
 
 ## Editing a source
 
-The CLI edits a source with a JSON batch. Each operation goes through `Log.Do`, so the batch keeps
-node ids and the inverse data undo needs, and it saves by appending when it can.
+The CLI edits a source in two ways that make the same operations: `put` reads back text as `cat`
+prints it, and `edit` takes a JSON batch. Each operation goes through `Log.Do`, so either keeps
+node ids and the inverse data undo needs, and saves by appending when it can.
+
+### As text
+
+`cat <file> [n]` prints the graph, or the subtree under one node, one line per node:
+
+```text
+source 36ed909f2cfffc8820f1b72c18152022
+4 slots, 4 live
+
+doc   n0
+  table  {rows 2} [id, x, flag]   n1
+    | 1, 1.5, true
+    | 2, -2.25, false
+  note  "check this row"   n2
+    --row-of 1--> n1
+  blob  <200 bytes>   n3
+```
+
+A node's line is its kind, its payload and its id. Its rows, references and children follow,
+indented under it. The payload is written the way its kind's schema reads it:
+
+| format | written |
+|---|---|
+| `text` | a string in double quotes, with JSON's escapes |
+| `text after` *H* | the header, then the string |
+| `one` *T* | the element: a bare value for one unnamed scalar, `{name value, …}` for named fields |
+| `many` *T* [`after` *H*] | the header and the columns, `[id, x, flag]`, on the node's line, then one row per line under it, `\| 1, 1.5, true`, with values in the order the fields are declared |
+| `many u8` | its bytes, `0x…` |
+| `opaque` | its bytes, `0x…` |
+
+A field repeated *n* times is `(a b c)`. A run of `u8` is hex, as an id or a digest prints.
+Floats print so they read back exactly. A payload that does not read as its format says is
+printed as its bytes, `0x…`. More than 64 such bytes print as `<N bytes>`, which `put` reads as
+"keep it". A kind or relation whose local name two libraries share is printed qualified, as
+`library-id/name`.
+
+A reference is `--relation--> n12`, under the node it leaves from. Its edge data, read as its
+relation's format says, comes before the arrow: `--row-of 1--> n1` addresses row 1 of `n1`. An
+unbound reference is `--about--> unbound "label"`. One whose target was deleted is
+`--about--> n7 (deleted)`.
+
+`put <file> (<text-file> | - | --text <text>)` writes such text back. Each outermost line names a
+node already in the source, by id, and the subtree under it becomes what the text says:
+
+* A line with an id restates that node: its kind (a different one is a retype), its payload, its
+  references, and where it sits, so a line moved is a node moved.
+* A line without an id adds a node. Ending the line with `@name` instead of an id names the new
+  node for references elsewhere in the same text: `--about--> @name`.
+* A node in a restated subtree that the text leaves out is deleted, with everything under it.
+  References to it are left dangling, as any deletion leaves them, and `put` says how many.
+
+Text that comes back as `cat` printed it is no change. A changed payload becomes the smallest
+splice that makes it, so changing one row splices that row's bytes. A `source` line that names a
+different source is refused, because its ids name that source's nodes. `--kinds`, `--dry-run` and
+`--expect-hash` work as they do for `edit`.
+
+```sh
+dotnet run --project src/Supersource.Cli -c Release -- cat source.ss n1 > n1.txt
+dotnet run --project src/Supersource.Cli -c Release -- put source.ss n1.txt --dry-run
+```
+
+### As a JSON batch
 
 ```sh
 dotnet run --project src/Supersource.Cli -c Release -- edit source.ss edits.json --dry-run
@@ -398,9 +461,10 @@ the handle it registers.
 
 ### Validation and saving
 
-The CLI checks the source's structure before editing, applies the batch in memory, then checks
-the result's structure and the payload and edge formats of the nodes it touched. Incomplete
-references are allowed. An invalid batch is discarded without saving.
+The CLI checks the source's structure before editing, applies the batch or the text in memory,
+then checks the result's structure and the payload and edge formats of the nodes it touched.
+Incomplete references are allowed. An invalid batch or text is discarded without saving, and
+`put` names the line it could not read.
 
 `--dry-run` goes through the same checks, prints the input's SHA-256 and the operations, and
 leaves the file alone. `--expect-hash` refuses the edit if the file's hash has changed since. The
@@ -570,7 +634,7 @@ dotnet run --project src/Supersource.Cli -c Release -- <verb> <file> [args]
 
 | verb | purpose |
 |---|---|
-| `cat` | print the graph |
+| `cat [n]` | the graph, or the subtree under n, as text `put` reads back |
 | `node <n>` | one node: its state, parent, payload, indexed references and child ids |
 | `stat` | counts, payload sizes and how much of the source is interpretable |
 | `find <kind> [text]` | nodes of a kind, optionally holding some text |
@@ -588,6 +652,7 @@ dotnet run --project src/Supersource.Cli -c Release -- <verb> <file> [args]
 | `deps [libs...]` | external references, and whether they resolve against the given libraries |
 | `new <file> --root <kind>` | create a source with an identity and a root |
 | `declare <file> <kinds.json>` | add kinds and relations, making the source a kind library |
+| `put <file> <text>` | write text as `cat` prints it back into the source |
 | `edit <file> <edits.json>` | apply a checked batch |
 
 `--help` prints the full argument syntax. Node ids accept `n12` or `12`. `node` shows the selected

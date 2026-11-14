@@ -11,4 +11,8 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <ProjectReference Include="../../src/Supersource.Cli/Supersource.Cli.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Externally authored sources, for reading every one back through `put` as no change. -->
+    <None Include="..\fixtures\**\*.ss" CopyToOutputDirectory="PreserveNewest" LinkBase="fixtures" />
+  </ItemGroup>
 </Project>

@@ -26,7 +26,7 @@ public static class Program
     {
         "roundtrip", "cat", "stat", "validate", "rules", "missing", "refs",
         "sections", "upgrade", "diff", "merge", "kinds", "verify",
-        "find", "node", "deps", "edit", "new", "declare",
+        "find", "node", "deps", "edit", "put", "new", "declare",
     };
 
     public static int Main(string[] args)
@@ -84,9 +84,10 @@ public static class Program
         switch (args[0])
         {
             case "roundtrip": code = RoundTrip(Arg(args, 1)); return true;
-            case "cat":       code = Cat(Arg(args, 1)); return true;
+            case "cat":       code = Cat(args); return true;
             case "node":      code = InspectNode(args); return true;
             case "edit":      code = Edit.Run(args); return true;
+            case "put":       code = Put.Run(args); return true;
             case "new":       code = Declaring.New(args); return true;
             case "declare":   code = Declaring.Declare(args); return true;
             case "stat":      code = Stat(Arg(args, 1)); return true;
@@ -124,9 +125,10 @@ public static class Program
     {
         w.WriteLine("  new <out.ss> --root <kind> [--label t] [--kinds <source.ss>] [--identity mint|<hex>] [--force]  create a source");
         w.WriteLine("  declare <library.ss> <declaration.json> [--dry-run]  declare this library's kinds and relations");
+        w.WriteLine("  put <file> (<text> | - | --text t) [--kinds <source.ss>] [--dry-run] [--expect-hash <sha256>]  write text as cat prints it back");
         w.WriteLine("  edit <file> <edits.json> [--kinds <source.ss>] [--dry-run] [--expect-hash <sha256>]  apply a checked batch");
         w.WriteLine("  --help                              show usage");
-        w.WriteLine("  cat <file>                          print the graph");
+        w.WriteLine("  cat <file> [n]                       print the graph, or the subtree under n, as put reads it");
         w.WriteLine("  node <file> <n>                      inspect one node, its children and references");
         w.WriteLine("  stat <file>                          counts, payload sizes and schema coverage");
         w.WriteLine("  validate <file>                      check structural integrity");
@@ -663,7 +665,7 @@ public static class Program
     }
 
     /// <summary>The part of an operation worth showing, which differs by kind.</summary>
-    static string Describe(in SourceFile file, in Operation op)
+    internal static string Describe(in SourceFile file, in Operation op)
     {
         switch (op.Kind)
         {
@@ -693,115 +695,41 @@ public static class Program
         }
     }
 
-    static int Cat(string path)
-    {
-        SourceFile file = SourceRead.FromFile(path);
-
-        Console.WriteLine("source " + file.Src.Identity);
-        Console.WriteLine(file.Src.NodeCount + " slots, " +
-            (file.Src.NodeCount - file.Src.DeletedNodeCount()) + " live");
-        Console.WriteLine();
-
-        if (file.Src.Root.IsSome && file.Src.IsLive(file.Src.Root))
-        {
-            Print(in file, file.Src.Root, 0);
-        }
-
-        return 0;
-    }
-
     /// <summary>
-    /// Prints a subtree iteratively to avoid stack overflow on deep containment. Children are
-    /// pushed in reverse to preserve their order.
+    /// `cat <file> [n]`: the graph, or the subtree under one node, as text `put` reads back.
     /// </summary>
-    static void Print(in SourceFile file, NodeId root, int rootDepth)
+    static int Cat(string[] args)
     {
-        long[] work = new long[64];
-        int[] depths = new int[64];
-        int count = 0;
-
-        work[count] = root.Index;
-        depths[count] = rootDepth;
-        count++;
-
-        while (count > 0)
+        if (args.Length < 2 || args.Length > 3)
         {
-            count--;
-            NodeId id = new NodeId(work[count]);
-            int depth = depths[count];
+            Console.Error.WriteLine("usage: cat <file> [n]");
+            return 1;
+        }
 
-            PrintOne(in file, id, depth);
-
-            ReadOnlySpan<long> children = SourceWalk.Children(in file.Src, id);
-            if (count + children.Length > work.Length)
+        SourceFile file = SourceRead.FromFile(args[1]);
+        try
+        {
+            NodeId from = file.Src.Root;
+            if (args.Length == 3)
             {
-                int size = work.Length;
-                while (size < count + children.Length)
+                from = ParseNode(args[2]);
+                if (from.Index >= file.Src.NodeCount || !file.Src.IsLive(from))
                 {
-                    size *= 2;
+                    Console.Error.WriteLine("no live node " + args[2]);
+                    return 2;
                 }
-                Array.Resize(ref work, size);
-                Array.Resize(ref depths, size);
             }
 
-            for (int c = children.Length - 1; c >= 0; c--)
+            GraphText.Header(in file, Console.Out);
+            if (from.IsSome && file.Src.IsLive(from))
             {
-                work[count] = children[c];
-                depths[count] = depth + 1;
-                count++;
+                GraphText.Print(in file, from, Console.Out);
             }
+            return 0;
         }
-    }
-
-    static void PrintOne(in SourceFile file, NodeId id, int depth, bool indices = false)
-    {
-        StringBuilder line = new StringBuilder();
-        line.Append(' ', depth * 2);
-
-        QualifiedName name = KindTable.NameOf(in file.Table, file.Src.Nodes[id.Index].Kind);
-        line.Append(name.Name ?? "<unknown-kind>");
-
-        if (!KindTable.HasSchema(in file.Table, file.Src.Nodes[id.Index].Kind))
+        finally
         {
-            line.Append(" [no schema]");
-        }
-
-        string shown = Payload(in file, id);
-        if (shown.Length > 0)
-        {
-            line.Append("  ").Append(shown);
-        }
-
-        line.Append("   ").Append(id.ToString());
-        Console.WriteLine(line.ToString());
-
-        ReadOnlySpan<Ref> refs = SourceWalk.References(in file.Src, id);
-        for (int r = 0; r < refs.Length; r++)
-        {
-            StringBuilder edge = new StringBuilder();
-            edge.Append(' ', depth * 2 + 2);
-            if (indices) edge.Append('[').Append(r).Append("] ");
-            edge.Append("--");
-            edge.Append(KindTable.RelationNameOf(in file.Table, refs[r].Relation).Name ?? "<unknown-relation>");
-            edge.Append("--> ");
-
-            if (refs[r].IsUnbound)
-            {
-                ReadOnlySpan<byte> label = SourceWalk.Label(in file.Src, in refs[r]);
-                edge.Append("unbound \"").Append(Encoding.UTF8.GetString(label)).Append('"');
-            }
-            else if (!file.Src.IsLive(refs[r].Target))
-            {
-                edge.Append(refs[r].Target).Append(" (deleted)");
-            }
-            else
-            {
-                edge.Append(refs[r].Target);
-            }
-
-            if (indices)
-                edge.Append("  (relation ").Append(KindTable.RelationNameOf(in file.Table, refs[r].Relation)).Append(')');
-            Console.WriteLine(edge.ToString());
+            SourceFile.Close(ref file);
         }
     }
 
@@ -828,7 +756,7 @@ public static class Program
             Console.WriteLine("parent " + file.Src.Nodes[id.Index].Parent);
             Console.WriteLine("kind " + KindTable.NameOf(in file.Table, file.Src.Nodes[id.Index].Kind));
             Console.WriteLine("payload " + file.Src.Nodes[id.Index].PayloadLength + " bytes");
-            PrintOne(in file, id, 0, true);
+            GraphText.Node(in file, id, 0, Console.Out, true);
 
             ReadOnlySpan<long> children = SourceWalk.Children(in file.Src, id);
             Console.WriteLine("children " + children.Length);
@@ -1033,9 +961,8 @@ public static class Program
     }
 
     /// <summary>
-    /// A payload as the value its kind's schema says it is: a quoted string, a number, a boolean,
-    /// the fields of an element, or the first few elements of many. Anything opaque, only sized, or
-    /// whose length does not fit its format is shown as a byte count.
+    /// A payload on one line, as `cat` prints it on its node's line, with the number of rows a
+    /// `many` payload has instead of the rows themselves.
     /// </summary>
     public static string Payload(in SourceFile file, NodeId id)
     {
@@ -1043,111 +970,11 @@ public static class Program
         {
             return "<" + SourceWalk.PayloadLength(in file.Src, id) + " bytes>";
         }
-        ReadOnlySpan<byte> payload = SourceWalk.Payload(in file.Src, id);
-        if (payload.Length == 0)
-        {
-            return string.Empty;
-        }
 
-        PayloadFormat format = KindTable.SchemaOf(in file.Table, file.Src.Nodes[id.Index].Kind).Payload;
-        switch (format.Form)
-        {
-            case PayloadForm.Text when format.HeaderSize == 0:
-                return "\"" + Encoding.UTF8.GetString(payload) + "\"";
-
-            case PayloadForm.Text when payload.Length >= format.HeaderSize:
-            {
-                int header = format.HeaderSize;
-                string text = "\"" + Encoding.UTF8.GetString(payload.Slice(header)) + "\"";
-                return format.Header.IsDescribed
-                    ? Element(in format.Header, payload.Slice(0, header)) + " " + text
-                    : text;
-            }
-
-            case PayloadForm.One when payload.Length == format.Element.Size && format.Element.IsDescribed:
-                return Element(in format.Element, payload);
-
-            case PayloadForm.Many when format.HasElements && format.Element.IsDescribed
-                && payload.Length >= format.ElementsStart
-                && (payload.Length - format.ElementsStart) % format.Element.Size == 0:
-            {
-                const int Shown = 8;
-                int count = format.ElementCount(payload.Length);
-                var text = new StringBuilder();
-                if (format.Header.IsDescribed)
-                {
-                    text.Append(Element(in format.Header, payload.Slice(0, format.ElementsStart))).Append(' ');
-                }
-                text.Append('[');
-                for (int e = 0; e < count && e < Shown; e++)
-                {
-                    if (e > 0) text.Append(", ");
-                    text.Append(Element(in format.Element,
-                        payload.Slice(format.ElementsStart + e * format.Element.Size, format.Element.Size)));
-                }
-                if (count > Shown) text.Append(", … ").Append(count - Shown).Append(" more");
-                return text.Append(']').ToString();
-            }
-
-            default:
-                return "<" + payload.Length + " bytes>";
-        }
-    }
-
-    /// <summary>One element: its value when it is one unnamed scalar, its named fields otherwise.</summary>
-    static string Element(in PayloadElement element, ReadOnlySpan<byte> bytes)
-    {
-        if (element.Fields.Length == 1 && string.IsNullOrEmpty(element.Fields[0].Name)
-            && element.Fields[0].Repeat == 1)
-        {
-            return Scalar(element.Fields[0].Type, bytes.Slice(element.Fields[0].Offset));
-        }
-
-        var text = new StringBuilder("{");
-        for (int f = 0; f < element.Fields.Length; f++)
-        {
-            PayloadField field = element.Fields[f];
-            if (f > 0) text.Append(", ");
-            text.Append(field.Name).Append(' ');
-            int size = PayloadScalars.Size(field.Type);
-
-            // A run of bytes is an id or a digest far more often than a list of numbers.
-            if (field.Type == PayloadScalar.U8 && field.Repeat > 1)
-            {
-                text.Append(Convert.ToHexString(bytes.Slice(field.Offset, field.Repeat)).ToLowerInvariant());
-                continue;
-            }
-
-            if (field.Repeat > 1) text.Append('(');
-            for (int n = 0; n < field.Repeat; n++)
-            {
-                if (n > 0) text.Append(' ');
-                text.Append(Scalar(field.Type, bytes.Slice(field.Offset + n * size)));
-            }
-            if (field.Repeat > 1) text.Append(')');
-        }
-        return text.Append('}').ToString();
-    }
-
-    static string Scalar(PayloadScalar type, ReadOnlySpan<byte> at)
-    {
-        CultureInfo c = CultureInfo.InvariantCulture;
-        switch (type)
-        {
-            case PayloadScalar.I8: return ((sbyte)at[0]).ToString(c);
-            case PayloadScalar.U8: return at[0].ToString(c);
-            case PayloadScalar.Bool: return at[0] == 0 ? "false" : "true";
-            case PayloadScalar.I16: return BinaryPrimitives.ReadInt16LittleEndian(at).ToString(c);
-            case PayloadScalar.U16: return BinaryPrimitives.ReadUInt16LittleEndian(at).ToString(c);
-            case PayloadScalar.F16: return ((double)BinaryPrimitives.ReadHalfLittleEndian(at)).ToString("R", c);
-            case PayloadScalar.I32: return BinaryPrimitives.ReadInt32LittleEndian(at).ToString(c);
-            case PayloadScalar.U32: return BinaryPrimitives.ReadUInt32LittleEndian(at).ToString(c);
-            case PayloadScalar.F32: return BinaryPrimitives.ReadSingleLittleEndian(at).ToString("R", c);
-            case PayloadScalar.I64: return BinaryPrimitives.ReadInt64LittleEndian(at).ToString(c);
-            case PayloadScalar.U64: return BinaryPrimitives.ReadUInt64LittleEndian(at).ToString(c);
-            case PayloadScalar.F64: return BinaryPrimitives.ReadDoubleLittleEndian(at).ToString("R", c);
-            default: return "?";
-        }
+        PayloadFormat format = GraphText.FormatOf(in file.Table, file.Src.Nodes[id.Index].Kind);
+        string part = GraphText.Payload(in format, SourceWalk.Payload(in file.Src, id), out int rows, elide: true);
+        if (rows == 0) return part;
+        return (part.Length > 0 ? part + " " : "") + "(" + rows + (rows == 1 ? " row)" : " rows)");
     }
 
     public static string Describe(in SourceFile file, NodeId id)

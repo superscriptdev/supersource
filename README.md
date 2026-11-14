@@ -42,7 +42,7 @@ Repo-local skills are in `.agents/skills/`:
 - [supersource-inspect](.agents/skills/supersource-inspect/SKILL.md): find nodes, follow references,
   inspect schemas, and diagnose structural or dependency issues.
 - [supersource-edit](.agents/skills/supersource-edit/SKILL.md): edit nodes, payloads and references
-  through checked JSON batches with a preview.
+  by writing back the text `cat` prints, with a preview.
 - [supersource-maintain](.agents/skills/supersource-maintain/SKILL.md): compare versions, merge,
   check round trips and upgrade the storage format.
 

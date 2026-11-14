@@ -496,12 +496,19 @@ public static class Mcp
     {
         McpParam file = McpParam.At("file", "path to the .ss file");
         McpParam node = McpParam.At("node", "a node, as `n12` or `12`");
+        McpParam text = McpParam.Option("text", "the text, as source.cat prints it");
+        text.Required = true;
 
         return new[]
         {
             McpTool.Read("source.stat", "Counts, payload sizes, and how much of it this build can interpret.",
                 new[] { "stat" }, file),
-            McpTool.Read("source.cat", "The whole graph, as text.", new[] { "cat" }, file),
+            McpTool.Read("source.cat",
+                "The graph as text, or the subtree under one node: a line per node with its kind, "
+                + "its payload as its schema reads it and its id, then the rows of a table payload "
+                + "(`| 1, 1.5, true`), its references (`--relation data--> n12`) and its children, "
+                + "indented. source.put reads this text back.",
+                new[] { "cat" }, file, McpParam.At("node", "only the subtree under this node, as `n12`", false)),
             McpTool.Read("source.node", "One node, its children and its references.",
                 new[] { "node" }, file, node),
             McpTool.Read("source.validate", "Structural integrity only; source.rules checks the rest.",
@@ -546,11 +553,26 @@ public static class Mcp
                 McpParam.At("declaration", "path to the declaration, as JSON"),
                 McpParam.Switch("dry-run", "check the declaration and write nothing")),
 
+            McpTool.Write("source.put",
+                "Write text as source.cat prints it back into the source. This is how to edit a "
+                + "source's nodes. Each outermost line names a node already there by id, and the "
+                + "subtree under it becomes what the text says: a line with an id restates that "
+                + "node (kind, payload, rows, references, place), a line without one adds a node "
+                + "(`@name` at its end lets a reference point at it), and a node the text leaves "
+                + "out of a restated subtree is deleted. Unchanged text is no change; a changed row "
+                + "is a splice of that row.",
+                new[] { "put" }, file,
+                text,
+                McpParam.Option("kinds", "a source whose embedded schemas to seed kind names from"),
+                McpParam.Switch("dry-run", "report the operations and write nothing"),
+                McpParam.Option("expect-hash", "refuse unless the file's sha256 matches")),
+
             McpTool.Write("source.edit",
                 "Apply a checked batch of structural edits: insert, set-payload, splice, "
                 + "move, retype, delete, connect, disconnect, extern. Checks structure, and the "
                 + "payload and edge formats of the nodes it touches; it knows nothing of what a "
-                + "kind means.",
+                + "kind means. source.put is the same change written as text; this is the form "
+                + "underneath it, for an edit text cannot say, such as extern.",
                 new[] { "edit" }, file,
                 McpParam.At("edits", "path to a JSON array of edit operations"),
                 McpParam.Option("kinds", "a source whose embedded schemas to seed kind names from"),

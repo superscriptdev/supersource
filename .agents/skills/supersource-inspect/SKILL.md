@@ -33,8 +33,9 @@ relevant section of [DOCS.md](../../../DOCS.md).
   references and immediate child IDs. This does not traverse descendants. It prints the full
   text payload and direct lists, so an individual large node can still produce substantial output.
 - Use `refs <file> <n>` for incoming references. A file keeps no history: it holds one state.
-- Use `cat <file>` when the whole graph is needed; avoid dumping a large source just to find
-  one node. Node arguments accept `n12` or `12`, as printed by the CLI.
+- Use `cat <file> [n]` for the graph, or only the subtree under one node, as text: a line per
+  node, a table's rows under it, references as `--relation data--> n12`. Avoid dumping a large
+  source just to find one node. Node arguments accept `n12` or `12`, as printed by the CLI.
 
 Example with the repository fixture:
 
