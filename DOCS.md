@@ -475,6 +475,59 @@ The root cannot be deleted or moved. Exit 1 means the batch or its result was re
 hash mismatch or a refused save; exit 2 a corrupt input or an I/O error. A pre-existing
 `<file>.writing` sibling is preserved and refuses the save.
 
+### Through an open session
+
+While a session holds a source, its server keeps a lease beside the file, `<file>.lease` (Quire
+`docs/sessions.md`, "Outside tools write through the session"). The lease is text:
+
+```
+superscript-lease 1
+holder Ada's Super Studio
+address 127.0.0.1:51234
+token 0fa0…
+expires 1764000000000
+```
+
+The holder is for a person to read, the address is the loopback port the server listens on, the
+token is what a tool sends, in lower-case hexadecimal, and the expiry is in Unix milliseconds. The
+server renews it every few seconds, and a lease past its expiry is ignored, so a server that stops
+holds the file for no longer than that.
+
+When `put`, `edit` or `superscript write` find a live lease, they connect to its port and ask for
+the source as it stands. The session answers its revision and the source as version 5 bytes,
+whose next id starts a block of ids kept for this tool, so new nodes need no renumbering. The verb
+edits that source in memory as it would edit the file, runs the same checks, and sends the
+difference (`StructuralDiff`) as one journal entry, encoded as an appended save encodes it
+(`JournalCodec`), with the kind and relation numbers of the source the session sent. The session
+applies it at a revision, holds it as a proposal, or refuses it, with a sentence, and the verb says
+which:
+
+```
+sent 2 edit(s) as 3 operation(s)
+applied to the open session at revision 41, which writes the file when it saves
+```
+
+The file is the session's to save, so a verb that went through the session leaves it alone.
+`--dry-run` sends nothing. `--expect-hash` names the file's bytes, which are not what the session
+holds, so it is refused under a lease. An edit that makes a node of a kind, or a reference of a
+relation, that the session's source does not hold is refused with a sentence, since the entry
+carries numbers only. A live lease whose server cannot be reached refuses the edit as an I/O
+error, since the file may be behind what the session shows.
+
+The read verbs read through the session the same way: `cat`, and `superscript show` and `check`.
+A source's dependencies are read from their files, since a pin names saved bytes.
+
+The frames are the session's own (Quire `docs/sessions.md`, "What travels"). The engine's sockets
+carry each send as one message with a four-byte little-endian length of its own before it, so a
+tool sends each frame inside one such message, and reads the session's frames out of the messages
+that arrive, keeping what has come until a frame is whole.
+
+A tool names itself to the session as it writes. The command line writes as a tool, under the
+verb's name. The MCP server writes as an agent, under the name its client gave when it connected,
+and a process an MCP server runs a call in reads that name from `SUPERSOURCE_AGENT`. The session
+holds an agent's write for its person until her setting lets it write. The seam's code is
+`Supersource.Seam`: `Lease`, `SeamClient` for the frames, and `SeamEdit` for a verb's visit.
+
 ## What this repository is not
 
 The format and its generic tools are open; applications and kind libraries built on them may be

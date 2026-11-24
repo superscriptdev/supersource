@@ -53,15 +53,27 @@ public static class Put
 
         SourceFile file = default;
         SourceFile seed = default;
+        Supersource.Seam.SeamEdit seam = null;
         try
         {
             string text = inline ?? (from == "-" ? Console.In.ReadToEnd() : File.ReadAllText(from));
 
-            string before = ContentHash.OfFile(path).ToString();
-            if (expected != null && !string.Equals(before, expected, StringComparison.OrdinalIgnoreCase))
-                return Refuse("file hash differs from --expect-hash; inspect the current file before retrying");
-
-            file = SourceRead.FromFile(path);
+            // While a session holds the file, the text goes into the session's source and the
+            // edits to the session, which writes the file when it saves.
+            string before = null;
+            if (Supersource.Seam.SeamEdit.Open(path, out seam))
+            {
+                if (expected != null)
+                    return Refuse("a session holds the file, and --expect-hash names the file's bytes, which are not what the session holds; cat it again and put without --expect-hash");
+                file = seam.Read();
+            }
+            else
+            {
+                before = ContentHash.OfFile(path).ToString();
+                if (expected != null && !string.Equals(before, expected, StringComparison.OrdinalIgnoreCase))
+                    return Refuse("file hash differs from --expect-hash; inspect the current file before retrying");
+                file = SourceRead.FromFile(path);
+            }
             Edit.CheckStructure(in file);
 
             if (library != null)
@@ -88,11 +100,11 @@ public static class Put
             Edit.CheckStructure(in file);
             Edit.CheckPayloads(in file, state.Touched);
 
-            if (ContentHash.OfFile(path).ToString() != before)
+            if (seam == null && ContentHash.OfFile(path).ToString() != before)
                 return Refuse("file changed while reading the text; no save attempted");
 
             Console.WriteLine("source " + file.Src.Identity);
-            Console.WriteLine("input hash " + before);
+            Console.WriteLine(seam == null ? "input hash " + before : "session " + seam.Lease.Holder + ", at revision " + seam.Revision);
             Console.Write(state.Report.ToString());
 
             int danglingAfter = Dangling(in file.Src);
@@ -109,9 +121,10 @@ public static class Put
             }
             if (dryRun)
             {
-                Console.WriteLine("dry run: " + state.Steps + " edit(s) checked; file unchanged");
+                Console.WriteLine("dry run: " + state.Steps + " edit(s) checked; " + (seam == null ? "file unchanged" : "nothing sent"));
                 return 0;
             }
+            if (seam != null) return Edit.Sent(seam, in file, "supersource put", state.Steps);
             if (File.Exists(path + ".writing"))
                 return Refuse("a .writing sibling already exists; preserve it before retrying");
             if (!SourceWrite.Replace(ref file, path, out string refusal)) return Refuse(refusal);
@@ -119,7 +132,7 @@ public static class Put
             return 0;
         }
         catch (Exception error) when (error is ArgumentException || error is FormatException
-            || error is InvalidOperationException)
+            || error is InvalidOperationException || error is Supersource.Seam.SeamRefusal)
         {
             Console.Error.WriteLine("put rejected: " + error.Message);
             return 1;
@@ -131,6 +144,7 @@ public static class Put
         }
         finally
         {
+            seam?.Dispose();
             SourceFile.Close(ref seed);
             SourceFile.Close(ref file);
         }

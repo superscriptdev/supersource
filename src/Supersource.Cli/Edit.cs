@@ -37,16 +37,29 @@ public static class Edit
 
         SourceFile file = default;
         SourceFile seed = default;
+        Supersource.Seam.SeamEdit seam = null;
         try
         {
             using JsonDocument patch = JsonDocument.Parse(File.ReadAllBytes(args[2]));
             if (patch.RootElement.ValueKind != JsonValueKind.Array || patch.RootElement.GetArrayLength() == 0)
                 throw new ArgumentException("edits must be a nonempty JSON array");
 
-            string before = ContentHash.OfFile(args[1]).ToString();
-            if (expected != null && !string.Equals(before, expected, StringComparison.OrdinalIgnoreCase))
-                return Refuse("file hash differs from --expect-hash; inspect the current file before retrying");
-            file = SourceRead.FromFile(args[1]);
+            // While a session holds the file, the edits go to the session's source and then to
+            // the session, which writes the file when it saves.
+            string before = null;
+            if (Supersource.Seam.SeamEdit.Open(args[1], out seam))
+            {
+                if (expected != null)
+                    return Refuse("a session holds the file, and --expect-hash names the file's bytes, which are not what the session holds; read it again and edit without --expect-hash");
+                file = seam.Read();
+            }
+            else
+            {
+                before = ContentHash.OfFile(args[1]).ToString();
+                if (expected != null && !string.Equals(before, expected, StringComparison.OrdinalIgnoreCase))
+                    return Refuse("file hash differs from --expect-hash; inspect the current file before retrying");
+                file = SourceRead.FromFile(args[1]);
+            }
             CheckStructure(in file);
 
             // `--kinds` seeds kind names from another source so the batch can name a kind the
@@ -102,16 +115,17 @@ public static class Edit
             CheckStructure(in file);
             CheckPayloads(in file, touched);
 
-            if (ContentHash.OfFile(args[1]).ToString() != before)
+            if (seam == null && ContentHash.OfFile(args[1]).ToString() != before)
                 return Refuse("file changed while preparing edits; no save attempted");
             Console.WriteLine("source " + file.Src.Identity);
-            Console.WriteLine("input hash " + before);
+            Console.WriteLine(seam == null ? "input hash " + before : "session " + seam.Lease.Holder + ", at revision " + seam.Revision);
             Console.Write(report.ToString());
             if (dryRun)
             {
-                Console.WriteLine("dry run: " + step + " edit(s) checked; file unchanged");
+                Console.WriteLine("dry run: " + step + " edit(s) checked; " + (seam == null ? "file unchanged" : "nothing sent"));
                 return 0;
             }
+            if (seam != null) return Sent(seam, in file, "supersource edit", step);
             if (File.Exists(args[1] + ".writing"))
                 return Refuse("a .writing sibling already exists; preserve it before retrying");
             if (!SourceWrite.Replace(ref file, args[1], out string refusal)) return Refuse(refusal);
@@ -119,7 +133,7 @@ public static class Edit
             return 0;
         }
         catch (Exception error) when (error is JsonException || error is ArgumentException
-            || error is FormatException || error is InvalidOperationException)
+            || error is FormatException || error is InvalidOperationException || error is Supersource.Seam.SeamRefusal)
         {
             Console.Error.WriteLine("edit rejected: " + error.Message);
             return 1;
@@ -131,9 +145,28 @@ public static class Edit
         }
         finally
         {
+            seam?.Dispose();
             SourceFile.Close(ref seed);
             SourceFile.Close(ref file);
         }
+    }
+
+    /// <summary>
+    /// Sends a verb's edits of the session's source to the session as one write under the verb's
+    /// name, and says what the session did with them. Exit 0 applied or held as a proposal, 3
+    /// refused.
+    /// </summary>
+    internal static int Sent(Supersource.Seam.SeamEdit seam, in SourceFile file, string verb, int steps)
+    {
+        var answer = seam.Send(in file, verb, Supersource.Seam.SeamWriter.Tool, out int operations);
+        if (answer.Outcome == Supersource.Seam.SeamOutcome.Refused)
+        {
+            Console.Error.WriteLine(verb.Substring(verb.IndexOf(' ') + 1) + " " + Supersource.Seam.SeamEdit.Said(answer));
+            return 3;
+        }
+        Console.WriteLine("sent " + steps + " edit(s) as " + operations + " operation(s)");
+        Console.WriteLine(Supersource.Seam.SeamEdit.Said(answer));
+        return 0;
     }
 
     static int Usage()

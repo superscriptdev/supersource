@@ -38,10 +38,12 @@ public static class Program
     public static int Dispatch(string[] args, Verbs verbs, Action<TextWriter> usage)
     {
         // Labels and text payloads are UTF-8, and a console left on the system code page prints
-        // anything outside ASCII as something else, MCP's JSON included.
+        // anything outside ASCII as something else, MCP's JSON included. Setting InputEncoding
+        // replaces Console.In, which drops whatever an MCP server had already read ahead of the
+        // request it is dispatching, so each is set only when it is not UTF-8 already.
         var utf8 = new System.Text.UTF8Encoding(false);
-        Console.OutputEncoding = utf8;
-        Console.InputEncoding = utf8;
+        if (Console.OutputEncoding.CodePage != 65001) Console.OutputEncoding = utf8;
+        if (Console.InputEncoding.CodePage != 65001) Console.InputEncoding = utf8;
 
         if (args.Length == 0)
         {
@@ -706,7 +708,8 @@ public static class Program
             return 1;
         }
 
-        SourceFile file = SourceRead.FromFile(args[1]);
+        // The open session's source while one holds the file.
+        SourceFile file = Supersource.Seam.SeamEdit.ReadOf(args[1]);
         try
         {
             NodeId from = file.Src.Root;

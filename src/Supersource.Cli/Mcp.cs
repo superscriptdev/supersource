@@ -123,6 +123,9 @@ public static class Mcp
 {
     const string Protocol = "2024-11-05";
 
+    /// <summary>The name the client gave when it connected, or null before it has.</summary>
+    public static string Client;
+
     /// <summary>
     /// Read requests from stdin and answer on stdout, until the stream ends. Line-delimited
     /// JSON rather than the header framing.
@@ -180,7 +183,13 @@ public static class Mcp
 
             switch (methodElement.GetString())
             {
-                case "initialize": return Initialize(id, name);
+                case "initialize":
+                    // The client's name, which a write through an open session goes under.
+                    if (root.TryGetProperty("params", out JsonElement init) && init.ValueKind == JsonValueKind.Object
+                        && init.TryGetProperty("clientInfo", out JsonElement info) && info.ValueKind == JsonValueKind.Object
+                        && info.TryGetProperty("name", out JsonElement client) && client.ValueKind == JsonValueKind.String)
+                        Client = client.GetString();
+                    return Initialize(id, name);
                 case "tools/list": return ToolList(id, tools);
                 case "tools/call": return ToolCall(id, root, tools, run);
                 case "ping": return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}";
@@ -332,7 +341,10 @@ public static class Mcp
         {
             Console.SetOut(into);
             Console.SetError(into);
-            code = run(argv);
+            // A tool's write to an open session is an agent's, under its client's name, which the
+            // session holds for its person until her setting lets it write.
+            using (Supersource.Seam.SeamEdit.As(Client ?? "an MCP client", Supersource.Seam.SeamWriter.Agent))
+                code = run(argv);
         }
         catch (Exception error)
         {
