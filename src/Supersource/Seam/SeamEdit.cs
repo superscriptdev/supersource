@@ -100,7 +100,7 @@ public sealed class SeamEdit : IDisposable
                 return new SeamAnswer(SeamOutcome.Refused, 0, 0, refusal);
             if (operations == 0) return new SeamAnswer(SeamOutcome.Applied, Revision, 0, null);
             string agent = Environment.GetEnvironmentVariable(AgentVariable);
-            var who = Acting ?? (string.IsNullOrEmpty(agent) ? (writer, kind) : (agent, SeamWriter.Agent));
+            var who = Acting.Value ?? (string.IsNullOrEmpty(agent) ? (writer, kind) : (agent, SeamWriter.Agent));
             return client.Write(Revision, who.Name, who.Kind, entry);
         }
         finally
@@ -160,12 +160,13 @@ public sealed class SeamEdit : IDisposable
     /// </summary>
     public static IDisposable As(string name, SeamWriter kind)
     {
-        var before = Acting;
-        Acting = (name, kind);
+        var before = Acting.Value;
+        Acting.Value = (name, kind);
         return new Restore(before);
     }
 
-    [ThreadStatic] static (string Name, SeamWriter Kind)? Acting;
+    // It flows with the call into a thread the call starts, as the command line runs each verb on one.
+    static readonly System.Threading.AsyncLocal<(string Name, SeamWriter Kind)?> Acting = new();
 
     /// <summary>
     /// The variable an MCP server sets, to its client's name, for a process it runs a tool call
@@ -177,7 +178,7 @@ public sealed class SeamEdit : IDisposable
     {
         readonly (string, SeamWriter)? before;
         public Restore((string, SeamWriter)? before) => this.before = before;
-        public void Dispose() => Acting = before;
+        public void Dispose() => Acting.Value = before;
     }
 
     public void Dispose() => client.Dispose();
