@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using Supersource.Compare;
+using Supersource.Format;
 using Supersource.Kinds;
 using Supersource.Timeline;
 using Xunit;
@@ -214,6 +215,38 @@ public class Spec_PayloadDiff
         Assert.Equal(OpKind.Splice, shared.Kind);
         Assert.Equal(0, shared.Index);
         Assert.Equal(4, shared.Count);
+    }
+
+    [Theory]
+    [InlineData("abc", "abXbc")]
+    [InlineData("ab", "abab")]
+    [InlineData("éb", "éXéb")]
+    public void A_text_insertion_whose_end_repeats_what_follows_removes_nothing(string was, string now)
+    {
+        byte[] before = Encoding.UTF8.GetBytes(was), after = Encoding.UTF8.GetBytes(now);
+        Assert.True(PayloadDiff.Region(PayloadDiff.Shape.Text, PayloadFormat.Text, before, after,
+            out int at, out int removed, out int inserted));
+        Assert.Equal(0, removed);
+        Assert.Equal(after.Length - before.Length, inserted);
+
+        // The diff that reads a source in windows finds the same region.
+        SourceFile a = Texts(before, out NodeId node), b = Texts(after, out _);
+        Assert.True(PayloadDiff.RegionOf(PayloadDiff.Shape.Text, PayloadFormat.Text, in a.Src, in b.Src, node,
+            out long windowAt, out long windowRemoved, out long windowInserted));
+        Assert.Equal(((long)at, (long)removed, (long)inserted), (windowAt, windowRemoved, windowInserted));
+    }
+
+    static readonly SourceId TextLibrary = SourceId.Mint();
+
+    static SourceFile Texts(byte[] text, out NodeId node)
+    {
+        SourceFile file = SourceFile.Create(4);
+        KindId kind = KindTable.Intern(ref file.Table, new QualifiedName(TextLibrary, "text"));
+        KindTable.DefineSchema(ref file.Table, kind, StructuralFact.None, PayloadFormat.Text, ReadOnlySpan<RelationId>.Empty);
+        NodeId root = SourceBuild.AddRoot(ref file.Src, kind);
+        node = SourceBuild.AddChild(ref file.Src, root, kind);
+        SourceBuild.SetPayload(ref file.Src, node, text);
+        return file;
     }
 
     [Fact]

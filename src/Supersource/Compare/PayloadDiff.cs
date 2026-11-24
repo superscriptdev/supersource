@@ -278,9 +278,11 @@ public static class PayloadDiff
         while (suffix > 0)
         {
             int start = bytes.Length - suffix;
+            // A suffix that starts where the prefix ends starts on the prefix's own boundary, and
+            // the change between them is an insertion.
             if (start <= prefix)
             {
-                return 0;
+                return suffix;
             }
             if ((bytes[start] & 0xC0) != 0x80)
             {
