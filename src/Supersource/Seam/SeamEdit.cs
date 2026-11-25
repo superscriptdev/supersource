@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Supersource.Compare;
 using Supersource.Format;
@@ -96,12 +97,11 @@ public sealed class SeamEdit : IDisposable
         SourceFile sent = Read();
         try
         {
-            if (!Entry(in sent, in edited, out byte[] entry, out operations, out string refusal))
-                return new SeamAnswer(SeamOutcome.Refused, 0, 0, refusal);
+            SeamEntry entry = Entry(in sent, in edited, out operations);
             if (operations == 0) return new SeamAnswer(SeamOutcome.Applied, Revision, 0, null);
             string agent = Environment.GetEnvironmentVariable(AgentVariable);
             var who = Acting.Value ?? (string.IsNullOrEmpty(agent) ? (writer, kind) : (agent, SeamWriter.Agent));
-            return client.Write(Revision, who.Name, who.Kind, entry);
+            return client.Write(Revision, who.Name, who.Kind, in entry);
         }
         finally
         {
@@ -110,41 +110,107 @@ public sealed class SeamEdit : IDisposable
     }
 
     /// <summary>
-    /// The journal entry a write carries: the operations that turn the source the session sent
-    /// into the one the verb left, as a journal section's contents with the kind and relation
-    /// numbers of the session's source. False, with the sentence, when an operation names a kind or
-    /// a relation that source does not hold, since the session could not read it.
+    /// What a write carries: the operations that turn the source the session sent into the one the
+    /// verb left, as a journal section's contents numbered by the session's kinds and relations. A
+    /// kind or a relation they name that the session's source does not hold, and a relation such a
+    /// kind's schema uses, take the next numbers after the session's own, in the order the
+    /// operations first name them, and travel beside the journal.
     /// </summary>
-    public static bool Entry(in SourceFile sent, in SourceFile edited, out byte[] entry, out int operations, out string refusal)
+    public static SeamEntry Entry(in SourceFile sent, in SourceFile edited, out int operations)
     {
-        entry = null;
-        refusal = null;
         Operation[] ops = null;
         operations = StructuralDiff.Between(in sent.Src, in edited.Src, in edited.Table, ref ops);
+        int[] kindSlot = Slots(edited.KindSlot, edited.Table.KindCount, out int kinds);
+        int[] relationSlot = Slots(edited.RelationSlot, edited.Table.RelationCount, out int relations);
+        var newKinds = new List<int>();
+        var newRelations = new List<int>();
         for (int i = 0; i < operations; i++)
         {
-            int kind = JournalCodec.NamesKind(ops[i].Kind) ? ops[i].NodeKind.Value : -1;
-            if (kind >= 0 && (kind >= edited.KindSlot.Length || edited.KindSlot[kind] < 0))
+            if (JournalCodec.NamesKind(ops[i].Kind) && kindSlot[ops[i].NodeKind.Value] < 0)
             {
-                refusal = "the edit makes a node of kind " + KindTable.NameOf(in edited.Table, ops[i].NodeKind)
-                    + ", which the open session's source does not hold yet, so write it when no session holds the file";
-                return false;
+                KindId kind = ops[i].NodeKind;
+                kindSlot[kind.Value] = kinds + newKinds.Count;
+                newKinds.Add(kind.Value);
+                if (KindTable.HasSchema(in edited.Table, kind))
+                    foreach (RelationId used in KindTable.UsedRelations(in edited.Table, kind))
+                        Number(used.Value, relationSlot, relations, newRelations);
             }
-            int relation = JournalCodec.NamesRelation(ops[i].Kind) ? ops[i].Relation.Value : -1;
-            if (relation >= 0 && (relation >= edited.RelationSlot.Length || edited.RelationSlot[relation] < 0))
-            {
-                refusal = "the edit makes a reference of a relation the open session's source does not hold yet, "
-                    + "so write it when no session holds the file";
-                return false;
-            }
+            if (JournalCodec.NamesRelation(ops[i].Kind)) Number(ops[i].Relation.Value, relationSlot, relations, newRelations);
         }
+
         using var bytes = new MemoryStream();
         ByteWriter w = ByteWriter.Over(bytes);
-        JournalCodec.Write(ref w, ops, operations, edited.KindSlot, edited.RelationSlot);
+        JournalCodec.Write(ref w, ops, operations, kindSlot, relationSlot);
         w.Flush();
-        entry = bytes.ToArray();
+        if (newKinds.Count == 0 && newRelations.Count == 0)
+            return new SeamEntry(bytes.ToArray(), kinds, relations, Array.Empty<byte>(), Array.Empty<byte>(), Array.Empty<byte>());
+
+        var kindNames = new QualifiedName[newKinds.Count];
+        for (int i = 0; i < kindNames.Length; i++) kindNames[i] = KindTable.NameOf(in edited.Table, new KindId(newKinds[i]));
+        var relationNames = new QualifiedName[newRelations.Count];
+        for (int i = 0; i < relationNames.Length; i++) relationNames[i] = KindTable.RelationNameOf(in edited.Table, new RelationId(newRelations[i]));
+        byte[] schemas = SchemaSection.Write(in edited.Table, newKinds.ToArray(), newRelations.ToArray(), relationSlot, kinds, relations);
+        return new SeamEntry(bytes.ToArray(), kinds, relations, SourceWrite.WriteNames(kindNames), SourceWrite.WriteNames(relationNames), schemas);
+    }
+
+    // A file's slots by handle, as long as the table, with how many the file numbers.
+    static int[] Slots(int[] read, int count, out int numbered)
+    {
+        var slots = new int[Math.Max(count, read?.Length ?? 0)];
+        Array.Fill(slots, -1);
+        numbered = 0;
+        for (int i = 0; i < (read?.Length ?? 0); i++)
+        {
+            slots[i] = read[i];
+            if (read[i] >= numbered) numbered = read[i] + 1;
+        }
+        return slots;
+    }
+
+    static void Number(int relation, int[] slots, int numbered, List<int> added)
+    {
+        if (slots[relation] >= 0) return;
+        slots[relation] = numbered + added.Count;
+        added.Add(relation);
+    }
+
+    /// <summary>
+    /// How a session reads a write's journal: its own kinds and relations by the numbers its source
+    /// gives them, then the write's extras, which this declares in the source's table with their
+    /// schemas and numbers on in its slots. False, with nothing declared, when the extras start
+    /// anywhere but at the source's own counts, since then the session's kinds changed after the
+    /// tool read them and the tool reads the state again.
+    /// </summary>
+    public static bool Numbering(ref SourceFile file, in SeamEntry entry, out KindId[] kinds, out RelationId[] relations)
+    {
+        int[] kindSlot = Slots(file.KindSlot, file.Table.KindCount, out int kindCount);
+        int[] relationSlot = Slots(file.RelationSlot, file.Table.RelationCount, out int relationCount);
+        kinds = null;
+        relations = null;
+        if (entry.FirstKind != kindCount || entry.FirstRelation != relationCount) return false;
+
+        QualifiedName[] kindNames = Names(entry.KindNames);
+        QualifiedName[] relationNames = Names(entry.RelationNames);
+        kinds = new KindId[kindCount + kindNames.Length];
+        relations = new RelationId[relationCount + relationNames.Length];
+        for (int i = 0; i < kindSlot.Length; i++) if (kindSlot[i] >= 0) kinds[kindSlot[i]] = new KindId(i);
+        for (int i = 0; i < relationSlot.Length; i++) if (relationSlot[i] >= 0) relations[relationSlot[i]] = new RelationId(i);
+        for (int i = 0; i < kindNames.Length; i++) kinds[kindCount + i] = KindTable.Intern(ref file.Table, kindNames[i]);
+        for (int i = 0; i < relationNames.Length; i++) relations[relationCount + i] = KindTable.InternRelation(ref file.Table, relationNames[i]);
+        if (entry.Schemas.Length > 0) SchemaSection.Read(ByteReader.Over(entry.Schemas), ref file.Table, kinds, relations);
+
+        // The source numbers them from now on, so the next write's extras start after them.
+        kindSlot = Slots(kindSlot, file.Table.KindCount, out _);
+        relationSlot = Slots(relationSlot, file.Table.RelationCount, out _);
+        for (int i = 0; i < kindNames.Length; i++) kindSlot[kinds[kindCount + i].Value] = kindCount + i;
+        for (int i = 0; i < relationNames.Length; i++) relationSlot[relations[relationCount + i].Value] = relationCount + i;
+        file.KindSlot = kindSlot;
+        file.RelationSlot = relationSlot;
         return true;
     }
+
+    static QualifiedName[] Names(byte[] section) =>
+        section.Length == 0 ? Array.Empty<QualifiedName>() : SourceRead.ReadNames(ByteReader.Over(section), SourceWrite.FormatMajor);
 
     /// <summary>What a verb says of an answer, in one line.</summary>
     public static string Said(SeamAnswer answer) => answer.Outcome switch

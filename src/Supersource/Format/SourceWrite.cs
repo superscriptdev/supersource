@@ -457,7 +457,7 @@ public static class SourceWrite
     /// Encodes each library ID once, then names referencing library slots. Library slots follow
     /// first-use order.
     /// </summary>
-    static byte[] WriteNames(QualifiedName[] names)
+    internal static byte[] WriteNames(QualifiedName[] names)
     {
         SourceId[] libraries = new SourceId[names.Length];
         int[] libraryOf = new int[names.Length];

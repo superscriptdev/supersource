@@ -509,9 +509,13 @@ applied to the open session at revision 41, which writes the file when it saves
 
 The file is the session's to save, so a verb that went through the session leaves it alone.
 `--dry-run` sends nothing. `--expect-hash` names the file's bytes, which are not what the session
-holds, so it is refused under a lease. An edit that makes a node of a kind, or a reference of a
-relation, that the session's source does not hold is refused with a sentence, since the entry
-carries numbers only. A live lease whose server cannot be reached refuses the edit as an I/O
+holds, so it is refused under a lease. A kind or a relation the edit names that the session's source
+does not hold yet, and a relation such a kind's schema uses, takes the next number after the
+session's own, and travels beside the entry as a KindNames, a RelationNames and a Schemas section
+holding only them, with the numbers they start from (`SeamEntry`). The session declares them in
+that order before it applies the entry, and refuses a write whose numbers start anywhere but at
+its own counts, since its kinds changed after the tool read it. `SeamEdit.Numbering` is that
+reading for a session written in C#. A live lease whose server cannot be reached refuses the edit as an I/O
 error, since the file may be behind what the session shows.
 
 The read verbs read through the session the same way: `cat`, and `superscript show` and `check`.

@@ -25,7 +25,7 @@ namespace Supersource.Format;
 /// </summary>
 static class SchemaSection
 {
-    public static byte[] Write(in KindTable table, int[] kindOrder, int[] relationOrder, int[] relationSlot)
+    public static byte[] Write(in KindTable table, int[] kindOrder, int[] relationOrder, int[] relationSlot, int kindBase = 0, int relationBase = 0)
     {
         ByteWriter w = ByteWriter.Create(256);
 
@@ -48,7 +48,7 @@ static class SchemaSection
             }
 
             KindSchema schema = KindTable.SchemaOf(in table, kind);
-            w.UVar((ulong)slot);
+            w.UVar((ulong)(slot + kindBase));
             w.U16((ushort)schema.Facts);
             WriteFormat(ref w, in schema.Payload);
 
@@ -78,7 +78,7 @@ static class SchemaSection
                 continue;
             }
 
-            w.UVar((ulong)slot);
+            w.UVar((ulong)(slot + relationBase));
             WriteFormat(ref w, in schema.Payload);
         }
 

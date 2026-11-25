@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -78,8 +79,11 @@ public class Spec_Seam : IDisposable
         SourceBuild.AppendChild(ref edited.Src, edited.Src.Root, second);
         SourceBuild.SetPayload(ref edited.Src, new NodeId(1), Encoding.UTF8.GetBytes("the first paragraph, edited"));
 
-        Assert.True(SeamEdit.Entry(in before, in edited, out byte[] entry, out int operations, out string refusal), refusal);
+        SeamEntry entry = SeamEdit.Entry(in before, in edited, out int operations);
         Assert.True(operations > 0);
+        Assert.Equal((2L, 0L), (entry.FirstKind, entry.FirstRelation));
+        Assert.Empty(entry.KindNames);
+        Assert.Empty(entry.Schemas);
         Source replayed = Replayed(sent, entry);
         Operation[] left = null;
         Assert.Equal(0, StructuralDiff.Between(in replayed, in edited.Src, in edited.Table, ref left));
@@ -136,9 +140,51 @@ public class Spec_Seam : IDisposable
         Assert.Equal(41, Long(apply, ref at));
         Assert.Equal("Claude Code", Encoding.UTF8.GetString(Field(apply, ref at)));
         Assert.Equal((long)SeamWriter.Agent, Long(apply, ref at));
-        byte[] entry = Field(apply, ref at);
+        var entry = new SeamEntry(Field(apply, ref at), Long(apply, ref at), Long(apply, ref at),
+            Field(apply, ref at), Field(apply, ref at), Field(apply, ref at));
         Assert.Equal(apply.Length, at);
         Assert.Equal(3, SourceWalk.ChildCount(Replayed(sent, entry), new NodeId(0)) + 1);
+    }
+
+    [Fact]
+    public void A_kind_and_a_relation_the_session_lacks_travel_beside_the_journal_and_the_session_declares_them()
+    {
+        var made = Chapter(out KindId paragraph);
+        byte[] sent = SourceWrite.ToBytes(in made);
+        SourceFile.Close(ref made);
+
+        SourceFile before = SourceRead.FromBytes(sent), edited = SourceRead.FromBytes(sent);
+        RelationId cites = KindTable.InternRelation(ref edited.Table, new QualifiedName(Library, "cites"));
+        KindId figure = KindTable.Intern(ref edited.Table, new QualifiedName(Library, "figure"));
+        KindTable.DefineSchema(ref edited.Table, figure, StructuralFact.None, PayloadFormat.Opaque, new[] { cites });
+        NodeId added = SourceBuild.AddNode(ref edited.Src, figure);
+        SourceBuild.SetPayload(ref edited.Src, added, new byte[] { 1, 2, 3 });
+        SourceBuild.AppendChild(ref edited.Src, edited.Src.Root, added);
+        SourceBuild.AddRef(ref edited.Src, added, cites, new NodeId(1));
+
+        SeamEntry entry = SeamEdit.Entry(in before, in edited, out int operations);
+        Assert.True(operations > 0);
+        Assert.Equal((2L, 0L), (entry.FirstKind, entry.FirstRelation));
+        Assert.NotEmpty(entry.KindNames);
+        Assert.NotEmpty(entry.RelationNames);
+
+        // The session declares them after its own, with the figure's schema, and replays the edit.
+        SourceFile session = SourceRead.FromBytes(sent);
+        Assert.True(SeamEdit.Numbering(ref session, in entry, out KindId[] kinds, out RelationId[] relations));
+        Assert.Equal(new QualifiedName(Library, "figure"), KindTable.NameOf(in session.Table, kinds[2]));
+        Assert.Equal(new QualifiedName(Library, "cites"), KindTable.RelationNameOf(in session.Table, relations[0]));
+        Assert.Equal(PayloadForm.Opaque, KindTable.SchemaOf(in session.Table, kinds[2]).Payload.Form);
+        Assert.True(JournalCodec.Replay(ByteReader.Over(entry.Journal, 0, entry.Journal.Length - JournalCodec.DigestBytes), ref session.Src, kinds, relations));
+        Assert.Equal(kinds[2], session.Src.Nodes[added.Index].Kind);
+        Assert.Equal(new byte[] { 1, 2, 3 }, SourceWalk.Payload(in session.Src, added).ToArray());
+        Assert.Equal(3, session.KindSlot.Count(s => s >= 0));
+
+        // Once the session holds more kinds than the tool read, the same write's numbers mean
+        // something else, and it is read again.
+        Assert.False(SeamEdit.Numbering(ref session, in entry, out _, out _));
+        SourceFile.Close(ref session);
+        SourceFile.Close(ref before);
+        SourceFile.Close(ref edited);
     }
 
     [Fact]
@@ -166,14 +212,12 @@ public class Spec_Seam : IDisposable
     }
 
     // The source the session sent, with an apply's entry replayed onto it as the session would.
-    static Source Replayed(byte[] sent, byte[] entry)
+    static Source Replayed(byte[] sent, in SeamEntry entry)
     {
         SourceFile file = SourceRead.FromBytes(sent);
-        var kinds = new KindId[file.Table.KindCount];
-        var relations = new RelationId[file.Table.RelationCount];
-        for (int i = 0; i < file.KindSlot.Length; i++) if (file.KindSlot[i] >= 0 && file.KindSlot[i] < kinds.Length) kinds[file.KindSlot[i]] = new KindId(i);
-        for (int i = 0; i < file.RelationSlot.Length; i++) if (file.RelationSlot[i] >= 0 && file.RelationSlot[i] < relations.Length) relations[file.RelationSlot[i]] = new RelationId(i);
-        Assert.True(JournalCodec.Replay(ByteReader.Over(entry, 0, entry.Length - JournalCodec.DigestBytes), ref file.Src, kinds, relations), "the entry of " + entry.Length + " bytes, version " + entry[0]);
+        Assert.True(SeamEdit.Numbering(ref file, in entry, out KindId[] kinds, out RelationId[] relations));
+        byte[] journal = entry.Journal;
+        Assert.True(JournalCodec.Replay(ByteReader.Over(journal, 0, journal.Length - JournalCodec.DigestBytes), ref file.Src, kinds, relations), "the entry of " + journal.Length + " bytes, version " + journal[0]);
         return file.Src;
     }
 

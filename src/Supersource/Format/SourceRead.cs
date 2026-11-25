@@ -683,7 +683,7 @@ public static class SourceRead
         }
     }
 
-    static QualifiedName[] ReadNames(ByteReader r, ushort major)
+    internal static QualifiedName[] ReadNames(ByteReader r, ushort major)
     {
         if (major < 2)
         {

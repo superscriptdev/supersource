@@ -21,6 +21,15 @@ public enum SeamOutcome
 /// <summary>The session's answer to a write through the seam.</summary>
 public readonly record struct SeamAnswer(SeamOutcome Outcome, long Revision, long Proposal, string Sentence);
 
+/// <summary>
+/// The operations a write carries, as the session reads them: the journal entry, numbered by the
+/// session's kinds and relations, and those it names that the session's source does not hold. They
+/// take the numbers from <see cref="FirstKind"/> and <see cref="FirstRelation"/> on, the session's
+/// own counts when the tool read it, and their names and schemas are a v5 file's KindNames,
+/// RelationNames and Schemas sections holding only them, each empty when there are none.
+/// </summary>
+public readonly record struct SeamEntry(byte[] Journal, long FirstKind, long FirstRelation, byte[] KindNames, byte[] RelationNames, byte[] Schemas);
+
 /// <summary>Who writes through the seam, numbered as the session's wire numbers its participants.</summary>
 public enum SeamWriter : long
 {
@@ -102,17 +111,23 @@ public sealed class SeamClient : IDisposable
     }
 
     /// <summary>
-    /// Sends operations, encoded as one journal entry, as a write of the revision they were made
-    /// against, and answers what the session did with them.
+    /// Sends operations, encoded as one journal entry with the kinds and relations it names beyond
+    /// the session's own, as a write of the revision they were made against, and answers what the
+    /// session did with them.
     /// </summary>
-    public SeamAnswer Write(long revision, string writer, SeamWriter kind, byte[] entry)
+    public SeamAnswer Write(long revision, string writer, SeamWriter kind, in SeamEntry entry)
     {
         var w = new Frame(Apply);
         w.Bytes(lease.Token);
         w.Word(revision);
         w.Bytes(Encoding.UTF8.GetBytes(writer));
         w.Word((long)kind);
-        w.Bytes(entry);
+        w.Bytes(entry.Journal);
+        w.Word(entry.FirstKind);
+        w.Word(entry.FirstRelation);
+        w.Bytes(entry.KindNames);
+        w.Bytes(entry.RelationNames);
+        w.Bytes(entry.Schemas);
         Send(w.Finish());
         while (true)
         {
